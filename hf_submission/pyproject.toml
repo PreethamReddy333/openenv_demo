@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compliance-checker"
+version = "1.0.0"
+description = "Regulatory Compliance Checker — An OpenEnv RL environment for auditing product features against GDPR, HIPAA, and SOC2 regulations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Team Daedalus", email = "preetham9070@gmail.com"},
+]
+dependencies = [
+    "openenv-core",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "pydantic>=2.0.0",
+    "openai>=1.0.0",
+    "websockets>=11.0",
+]
+
+[project.scripts]
+server = "compliance_checker.server.app:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+
+[tool.setuptools.packages.find]
+include = ["compliance_checker*"]

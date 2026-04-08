@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.env
+openenv-course/
+primary_webpage.txt
+round-1-guide.txt
+hf_submission/

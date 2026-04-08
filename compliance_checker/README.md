@@ -34,12 +34,12 @@ This approach creates meaningful reward signal for RLHF/GRPO training — agents
 
 | Feature | Description |
 |---------|-------------|
-| 🎓 **Progressive Hints** | Failed attempts trigger increasingly specific hints — a learning curriculum within each episode |
-| 💊 **Remediation Quality Scoring** | Checks if the suggested fix actually addresses the violation type (e.g., encryption fix for encryption violation) |
-| 🔄 **Duplicate Detection** | Repeated submissions are penalized (-0.1), preventing exploitation |
-| 📊 **Composite Reward** | 60% coverage + 25% quality + 15% efficiency — not binary, truly continuous |
-| 📏 **13 Real Regulation Excerpts** | GDPR Articles 5/6/7/13/17/25/32, HIPAA Privacy/Security/Breach, SOC2 CC6/7/8 |
-| 🎯 **6 Realistic Scenarios** | From newsletter signups to AI insurance processors to smart building systems |
+|  **Progressive Hints** | Failed attempts trigger increasingly specific hints — a learning curriculum within each episode |
+| **Remediation Quality Scoring** | Checks if the suggested fix actually addresses the violation type (e.g., encryption fix for encryption violation) |
+| **Duplicate Detection** | Repeated submissions are penalized (-0.1), preventing exploitation |
+|**Composite Reward** | 60% coverage + 25% quality + 15% efficiency — not binary, truly continuous |
+| **13 Real Regulation Excerpts** | GDPR Articles 5/6/7/13/17/25/32, HIPAA Privacy/Security/Breach, SOC2 CC6/7/8 |
+| **6 Realistic Scenarios** | From newsletter signups to AI insurance processors to smart building systems |
 
 ---
 

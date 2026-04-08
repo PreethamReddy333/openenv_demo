@@ -448,7 +448,6 @@ class ComplianceEnvironment(Environment):
 
     def __init__(self):
         self._state = ComplianceState()
-        self._scenario: Dict = {}
         self._found_violation_ids: List[str] = []
         self._step_rewards: List[float] = []
         self._max_steps: int = 10
@@ -456,6 +455,10 @@ class ComplianceEnvironment(Environment):
         self._previous_submissions: List[str] = []  # track duplicates
         self._consecutive_failures: int = 0  # for progressive hints
         self._hint_level: Dict[str, int] = {}  # per-violation hint level
+        # Auto-initialize with default scenario so step() works
+        # even if called on a fresh instance (OpenEnv HTTP server creates
+        # a new instance per request)
+        self._scenario: Dict = SCENARIOS.get("easy_1", list(SCENARIOS.values())[0])
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> ComplianceObservation:
         """Start a new compliance audit episode."""

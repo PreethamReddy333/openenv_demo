@@ -29,10 +29,10 @@ from openai import OpenAI
 from compliance_checker.models import ComplianceAction
 from compliance_checker.client import ComplianceCheckerEnv
 
-IMAGE_NAME = os.getenv("IMAGE_NAME")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN = os.getenv("HF_TOKEN")
 BENCHMARK = "compliance_checker"
 TEMPERATURE = 0.3
 MAX_TOKENS = 800
@@ -71,14 +71,14 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     # Truncate action for logging
     action_short = action.replace("\n", " ")[:200]
     print(
-        f"[STEP] step={step} action={action_short} reward={reward:.2f} done={done_val} error={error_val}",
+        f"[STEP]  step={step} action={action_short} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+    print(f"[END]   success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
 
 
 def build_user_prompt(observation) -> str:
@@ -177,8 +177,8 @@ def get_model_response(client: OpenAI, observation) -> dict:
 
 async def run_task(client: OpenAI, task_id: str) -> tuple:
     """Run one task and return (success, steps, score, rewards)."""
-    if IMAGE_NAME:
-        env = await ComplianceCheckerEnv.from_docker_image(IMAGE_NAME)
+    if LOCAL_IMAGE_NAME:
+        env = await ComplianceCheckerEnv.from_docker_image(LOCAL_IMAGE_NAME)
     else:
         # Fallback to local testing — import and run directly
         from compliance_checker.server.environment import ComplianceEnvironment
@@ -209,7 +209,7 @@ async def run_task(client: OpenAI, task_id: str) -> tuple:
     log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        if IMAGE_NAME:
+        if LOCAL_IMAGE_NAME:
             result = await env.reset(task_id=task_id)
         else:
             result = await env.reset()
@@ -268,7 +268,7 @@ async def run_task(client: OpenAI, task_id: str) -> tuple:
 
 
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
     for task_id in TASKS:
         await run_task(client, task_id)

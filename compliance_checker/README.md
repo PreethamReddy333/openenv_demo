@@ -1,3 +1,14 @@
+---
+title: Compliance Checker
+emoji: 🛡️
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+tags:
+  - openenv
+---
+
 # 🛡️ Regulatory Compliance Checker — OpenEnv Environment
 
 **An RL environment that teaches AI agents to audit software products for GDPR, HIPAA, and SOC2 violations.**

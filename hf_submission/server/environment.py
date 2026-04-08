@@ -453,6 +453,7 @@ class ComplianceEnvironment(Environment):
         self._step_rewards: List[float] = []
         self._max_steps: int = 10
         self._task_id: str = "easy"
+        self._previous_submissions: List[str] = []  # track duplicates
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> ComplianceObservation:
         """Start a new compliance audit episode."""
@@ -472,6 +473,7 @@ class ComplianceEnvironment(Environment):
         self._scenario = SCENARIOS[scenario_id]
         self._found_violation_ids = []
         self._step_rewards = []
+        self._previous_submissions = []
 
         self._state = ComplianceState(
             episode_id=episode_id or str(uuid.uuid4()),
@@ -488,6 +490,18 @@ class ComplianceEnvironment(Environment):
             if reg_id in REGULATION_EXCERPTS:
                 reg_texts.append(REGULATION_EXCERPTS[reg_id])
 
+        action_instructions = (
+            "INSTRUCTIONS: You are a regulatory compliance auditor. Review the feature description "
+            "below and identify regulatory violations. For each violation, submit an action with "
+            "these fields:\n"
+            "  - violation_id: The regulation clause violated (e.g., 'GDPR-Art7', 'HIPAA-Security', 'SOC2-CC6')\n"
+            "  - violation_description: What is wrong and why it violates the regulation\n"
+            "  - severity: One of 'critical', 'high', 'medium', or 'low'\n"
+            "  - suggested_fix: A concrete, actionable remediation\n\n"
+            f"You must find {len(self._scenario['violations'])} violations. "
+            f"You have {self._max_steps} steps. Submit one violation per step."
+        )
+
         return ComplianceObservation(
             done=False,
             reward=None,
@@ -496,7 +510,7 @@ class ComplianceEnvironment(Environment):
             applicable_regulations=reg_texts,
             findings_so_far=[],
             remaining_violations=len(self._scenario["violations"]),
-            feedback="Audit started. Review the feature description and identify regulatory violations.",
+            feedback=action_instructions,
             max_steps_remaining=self._max_steps,
         )
 
@@ -505,9 +519,27 @@ class ComplianceEnvironment(Environment):
         self._state.step_count += 1
         steps_remaining = self._max_steps - self._state.step_count
 
-        # Score this finding against known violations
-        reward, feedback, matched = self._grade_finding(action)
-        self._step_rewards.append(reward)
+        # Check for duplicate/repeated submissions (penalize bad behavior)
+        submission_key = f"{action.violation_id}:{action.violation_description[:50]}".lower()
+        is_duplicate = submission_key in self._previous_submissions
+        self._previous_submissions.append(submission_key)
+
+        if is_duplicate:
+            reward = -0.1  # Penalize repeated submissions
+            feedback = (
+                "✗ DUPLICATE: You already submitted a similar finding. "
+                "Each submission must identify a DIFFERENT violation. "
+                f"Remaining: {len(self._scenario['violations']) - len(self._found_violation_ids)} violations to find."
+            )
+            matched = None
+        else:
+            # Score this finding against known violations
+            reward, feedback, matched = self._grade_finding(action)
+            # Give small partial credit (0.05) even for misses — the agent tried
+            if reward == 0.0 and not is_duplicate:
+                reward = 0.05
+
+        self._step_rewards.append(max(reward, 0.0))  # clamp negative for averaging
 
         if matched and matched not in self._found_violation_ids:
             self._found_violation_ids.append(matched)
@@ -520,7 +552,7 @@ class ComplianceEnvironment(Environment):
         findings_list = []
         for vid in self._found_violation_ids:
             for v in self._scenario["violations"]:
-                if v["id"] == vid or self._violation_key(v) in self._found_violation_ids:
+                if self._violation_key(v) == vid:
                     findings_list.append({
                         "violation_id": v["id"],
                         "description": v["description"],
@@ -528,18 +560,22 @@ class ComplianceEnvironment(Environment):
                     })
                     break
 
-        # Calculate episode reward
+        # Calculate reward signal
         if done:
-            episode_score = len(self._found_violation_ids) / len(self._scenario["violations"])
-            # Bonus for severity accuracy (average of step rewards)
-            if self._step_rewards:
-                avg_quality = sum(self._step_rewards) / len(self._step_rewards)
-                final_reward = 0.7 * episode_score + 0.3 * avg_quality
+            # Episode-level score: coverage (60%) + quality (25%) + efficiency (15%)
+            coverage = len(self._found_violation_ids) / len(self._scenario["violations"])
+            quality = sum(self._step_rewards) / max(len(self._step_rewards), 1)
+            # Efficiency: fewer steps to find all = better
+            if len(self._found_violation_ids) > 0:
+                efficiency = len(self._found_violation_ids) / self._state.step_count
             else:
-                final_reward = episode_score
+                efficiency = 0.0
+            final_reward = 0.60 * coverage + 0.25 * quality + 0.15 * min(efficiency, 1.0)
             final_reward = min(max(final_reward, 0.0), 1.0)
         else:
-            final_reward = reward
+            # Step-level: show cumulative progress as reward signal
+            progress = len(self._found_violation_ids) / len(self._scenario["violations"])
+            final_reward = max(reward, progress * 0.5)  # whichever is higher
 
         reg_texts = []
         for reg_id in self._scenario["applicable_regulation_ids"]:

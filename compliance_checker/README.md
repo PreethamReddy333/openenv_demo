@@ -1,139 +1,189 @@
-# Regulatory Compliance Checker — OpenEnv Environment
+# 🛡️ Regulatory Compliance Checker — OpenEnv Environment
 
-An RL environment that simulates regulatory compliance auditing. An AI agent reviews product feature descriptions and must identify violations of **GDPR**, **HIPAA**, and **SOC2** regulations, classify their severity, and suggest remediations.
+**An RL environment that teaches AI agents to audit software products for GDPR, HIPAA, and SOC2 violations.**
 
-## Why This Matters
+> Every startup scrambles for regulatory compliance. Lawyers cost $500/hr. This environment trains agents to do it at machine speed.
 
-Regulatory compliance is one of the most expensive and error-prone tasks in software development. Companies spend millions on legal counsel and compliance teams to ensure their products don't violate data protection laws. This environment trains and evaluates AI agents on their ability to:
+## What Makes This Different
 
-- Read product specifications and identify regulatory risks
-- Cite the correct regulation clause being violated
-- Assess violation severity accurately
-- Suggest actionable remediations
+Most environments just say "right" or "wrong." Ours **teaches the agent through progressive hints**, creating a learning curriculum within each episode:
+
+```
+Failure 1: "There are 5 violations remaining... a critical-severity issue."
+Failure 2: "Consider the HIPAA regulations... relates to anonymization."
+Failure 3: "Look at HIPAA-Privacy... related to: anonymization, de-identification, re-identification."
+Failure 4: "HIPAA-Privacy is violated. Issue: Inadequate anonymization — keeping age, ZIP..."
+```
+
+This approach creates meaningful reward signal for RLHF/GRPO training — agents don't just memorize answers, they learn to reason about regulations.
+
+---
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| 🎓 **Progressive Hints** | Failed attempts trigger increasingly specific hints — a learning curriculum within each episode |
+| 💊 **Remediation Quality Scoring** | Checks if the suggested fix actually addresses the violation type (e.g., encryption fix for encryption violation) |
+| 🔄 **Duplicate Detection** | Repeated submissions are penalized (-0.1), preventing exploitation |
+| 📊 **Composite Reward** | 60% coverage + 25% quality + 15% efficiency — not binary, truly continuous |
+| 📏 **13 Real Regulation Excerpts** | GDPR Articles 5/6/7/13/17/25/32, HIPAA Privacy/Security/Breach, SOC2 CC6/7/8 |
+| 🎯 **6 Realistic Scenarios** | From newsletter signups to AI insurance processors to smart building systems |
+
+---
 
 ## Environment Description
 
+### The Task
+The agent receives a **product feature description** (e.g., "Our telehealth app allows patients to video-call doctors...") and the **full text of applicable regulations**. It must:
+
+1. **Identify** specific regulatory violations in the feature
+2. **Classify** severity (critical/high/medium/low)
+3. **Cite** the correct regulation article (e.g., GDPR-Art17, HIPAA-Security)
+4. **Suggest** a concrete, actionable remediation
+
 ### Action Space
 
-The agent submits a compliance finding at each step:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `violation_id` | `str` | Regulation clause violated (e.g., "GDPR-Art17", "HIPAA-Security") |
-| `violation_description` | `str` | What's wrong and why it violates the regulation |
-| `severity` | `str` | "critical", "high", "medium", or "low" |
-| `suggested_fix` | `str` | Concrete, actionable remediation |
+```python
+class ComplianceAction(Action):
+    violation_id: str           # "GDPR-Art17", "HIPAA-Security", "SOC2-CC6"
+    violation_description: str  # What's wrong and why
+    severity: str               # "critical" | "high" | "medium" | "low"
+    suggested_fix: str          # Concrete remediation
+```
 
 ### Observation Space
 
-After each action, the agent sees:
+```python
+class ComplianceObservation(Observation):
+    task_id: str                        # "easy" | "medium" | "hard"
+    feature_description: str            # Product feature to audit
+    applicable_regulations: List[str]   # Full regulation text
+    findings_so_far: List[Dict]         # Previously accepted findings
+    remaining_violations: int           # How many left to find
+    feedback: str                       # Progressive hints or success feedback
+    max_steps_remaining: int            # Steps left
+```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `task_id` | `str` | Current task (easy/medium/hard) |
-| `feature_description` | `str` | The product feature being audited |
-| `applicable_regulations` | `List[str]` | Full text of relevant regulation excerpts |
-| `findings_so_far` | `List[Dict]` | Previously accepted findings |
-| `remaining_violations` | `int` | How many violations are left to find |
-| `feedback` | `str` | Feedback on the last submitted finding |
-| `max_steps_remaining` | `int` | Steps remaining in the episode |
+### Reward Function (Composite, Not Binary)
 
-### Reward Function
+**Step-level rewards** (0.0–1.0):
 
-Rewards are **not sparse** — the agent gets partial credit:
+| Component | Points | Condition |
+|-----------|--------|-----------|
+| Base match | 0.40 | Violation matches a known issue |
+| Correct regulation | 0.20 | Agent cites the right article |
+| Correct severity | 0.15 | Severity classification matches |
+| Strong keyword match | 0.10 | ≥60% keyword coverage |
+| Remediation quality | 0.00–0.15 | Fix uses violation-specific terminology |
 
-| Component | Weight | Description |
-|-----------|--------|-------------|
-| Violation match | 0.4 | Finding matches a real violation (keyword-based) |
-| Correct regulation | 0.2 | Agent cites the correct regulation clause |
-| Correct severity | 0.2 | Agent classifies severity accurately |
-| Quality fix | 0.1 | Suggested fix is substantive (>20 chars) |
-| Strong match | 0.1 | High-confidence keyword match (≥60%) |
+**Episode-level score:**
+```
+score = 0.60 × coverage + 0.25 × quality + 0.15 × efficiency
+```
+- `coverage` = violations found / total violations
+- `quality` = average step reward
+- `efficiency` = violations found / steps taken
 
-**Episode score** = 0.7 × (violations found / total violations) + 0.3 × (average step quality)
+**Special rewards:**
+- Miss (wrong finding): 0.05 (not 0.0 — continuous signal)
+- Duplicate submission: -0.1 (penalizes bad behavior)
 
-Score range: **0.0 – 1.0**
+---
 
-## Tasks
+## Tasks (3 Difficulty Levels)
 
-### Task 1: Easy — Single Regulation (GDPR)
-- **Scenarios**: User analytics dashboard, Newsletter signup
+### Task 1: Easy — GDPR Basics
+- **Scenarios**: User analytics dashboard, newsletter signup form
 - **Violations**: 3 per scenario (obvious: no consent, excessive data, no deletion)
 - **Max steps**: 8
 - **Regulations**: GDPR only
+- **Baseline score**: ~0.97
 
-### Task 2: Medium — Multiple Regulations (GDPR + HIPAA)
-- **Scenarios**: Telehealth patient portal, Employee wellness platform
-- **Violations**: 5 per scenario (subtler: inadequate anonymization, purpose limitation, bundled consent)
+### Task 2: Medium — Healthcare Compliance
+- **Scenarios**: Telehealth patient portal, employee wellness platform
+- **Violations**: 5 per scenario (subtle: inadequate anonymization, purpose limitation, bundled consent)
 - **Max steps**: 12
 - **Regulations**: GDPR + HIPAA
+- **Baseline score**: ~0.85
 
-### Task 3: Hard — Full Stack (GDPR + HIPAA + SOC2)
-- **Scenarios**: AI insurance claims processor, Smart building access system
-- **Violations**: 7 per scenario (ambiguous: shared credentials, fail-open design, training data PII, no explainability)
+### Task 3: Hard — Enterprise AI Audit
+- **Scenarios**: AI insurance claims processor, smart building access system
+- **Violations**: 7 per scenario (ambiguous: shared credentials, fail-open design, training data PII, no AI explainability)
 - **Max steps**: 15
 - **Regulations**: GDPR + HIPAA + SOC2
+- **Baseline score**: ~0.81
+
+---
+
+## Progressive Hints — The Learning Curriculum
+
+When an agent submits wrong findings, the environment provides increasingly specific hints:
+
+| Failure # | Hint Level | Example |
+|-----------|-----------|---------|
+| 1 | General | "5 violations remaining... a critical-severity issue" |
+| 2 | Regulation family | "Consider HIPAA... relates to anonymization" |
+| 3 | Specific article | "Look at HIPAA-Privacy... anonymization, de-identification, re-identification" |
+| 4+ | Near-answer | "HIPAA-Privacy is violated. Issue: Inadequate anonymization..." |
+
+This creates a **curriculum within each episode** — agents learn by attempting, failing, receiving guidance, and improving. This is ideal for RLHF and GRPO training.
+
+---
 
 ## Setup & Usage
 
-### Install Dependencies
+### Install
 ```bash
 pip install -r requirements.txt
 ```
 
-### Run Locally
+### Run Server
 ```bash
-# Start the server
-uvicorn compliance_checker.server.app:app --host 0.0.0.0 --port 8000
+uvicorn compliance_checker.server.app:app --host 0.0.0.0 --port 7860
+```
 
-# In another terminal, run inference
+### Run Inference
+```bash
 export API_BASE_URL="https://router.huggingface.co/v1"
 export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
 export HF_TOKEN="your-token"
-python -m compliance_checker.inference
+python inference.py
 ```
 
 ### Docker
 ```bash
 docker build -t compliance-checker .
-docker run -p 8000:8000 compliance-checker
+docker run -p 7860:7860 compliance-checker
 ```
 
-### Deploy to HF Spaces
-```bash
-openenv push --repo-id your-username/compliance-checker
-```
-
-## Baseline Scores
-
-| Task | Score | Model |
-|------|-------|-------|
-| Easy | ~0.75 | Qwen2.5-72B-Instruct |
-| Medium | ~0.55 | Qwen2.5-72B-Instruct |
-| Hard | ~0.35 | Qwen2.5-72B-Instruct |
-
-*Scores are approximate and vary by run.*
+---
 
 ## Architecture
 
 ```
-compliance_checker/
-├── models.py              ← Action, Observation, State (Pydantic)
-├── client.py              ← WebSocket client (EnvClient subclass)
-├── server/
-│   ├── environment.py     ← Compliance audit logic + scenarios
-│   ├── app.py             ← FastAPI server (1 line)
-│   └── __init__.py
-├── inference.py           ← LLM agent using OpenAI client
-├── openenv.yaml           ← Manifest
-├── Dockerfile             ← Container
-├── requirements.txt       ← Dependencies
-└── README.md              ← This file
+hf_submission/
+├── inference.py                     ← LLM agent with [START]/[STEP]/[END] logging
+├── compliance_checker/              ← Python package
+│   ├── __init__.py
+│   ├── models.py                    ← Typed Pydantic models
+│   ├── client.py                    ← WebSocket client
+│   └── server/
+│       ├── __init__.py
+│       ├── app.py                   ← FastAPI server + main()
+│       └── environment.py           ← 800+ lines: scenarios, grading, hints
+├── server/                          ← Root-level entry (openenv validate)
+│   ├── app.py
+│   └── environment.py
+├── Dockerfile
+├── requirements.txt
+├── pyproject.toml
+├── openenv.yaml                     ← Task definitions + reward spec
+└── README.md
 ```
 
-## Team
+## Team Daedalus
 
-**Team Daedalus**
-- T Preetham Reddy (Lead)
-- Somaraju Sai Ashrith Venkata Ram Krish Naga
-- Jyothiraditya SSVKSS
+- **T Preetham Reddy** (Lead)
+- **Somaraju Sai Ashrith Venkata Ram Krish Naga**
+- **Jyothiraditya SSVKSS**

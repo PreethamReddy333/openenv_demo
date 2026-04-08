@@ -454,6 +454,8 @@ class ComplianceEnvironment(Environment):
         self._max_steps: int = 10
         self._task_id: str = "easy"
         self._previous_submissions: List[str] = []  # track duplicates
+        self._consecutive_failures: int = 0  # for progressive hints
+        self._hint_level: Dict[str, int] = {}  # per-violation hint level
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> ComplianceObservation:
         """Start a new compliance audit episode."""
@@ -474,6 +476,8 @@ class ComplianceEnvironment(Environment):
         self._found_violation_ids = []
         self._step_rewards = []
         self._previous_submissions = []
+        self._consecutive_failures = 0
+        self._hint_level = {}
 
         self._state = ComplianceState(
             episode_id=episode_id or str(uuid.uuid4()),
@@ -630,6 +634,7 @@ class ComplianceEnvironment(Environment):
 
         if best_score >= 0.25:
             # Matched a violation
+            self._consecutive_failures = 0  # reset failure counter
             severity_correct = (
                 action.severity.lower().strip() == best_violation["severity"].lower().strip()
             )
@@ -643,15 +648,17 @@ class ComplianceEnvironment(Environment):
             if regulation_correct:
                 reward += 0.2
             if severity_correct:
-                reward += 0.2
-            if len(action.suggested_fix.strip()) > 20:
-                reward += 0.1
+                reward += 0.15
             if best_score >= 0.6:
                 reward += 0.1
 
+            # Remediation quality scoring — check if fix addresses the violation type
+            fix_quality = self._score_remediation(action.suggested_fix, best_violation)
+            reward += fix_quality  # 0.0 to 0.15 bonus
+
             reward = min(reward, 1.0)
 
-            feedback_parts = [f"✓ Valid finding identified."]
+            feedback_parts = [f"✓ Valid finding identified ({best_violation['id']})."]
             if regulation_correct:
                 feedback_parts.append("Correct regulation cited.")
             else:
@@ -660,15 +667,121 @@ class ComplianceEnvironment(Environment):
                 feedback_parts.append("Severity assessment is accurate.")
             else:
                 feedback_parts.append(f"Severity should be '{best_violation['severity']}', not '{action.severity}'.")
+            if fix_quality >= 0.1:
+                feedback_parts.append("Suggested remediation is well-targeted.")
+            elif fix_quality > 0:
+                feedback_parts.append("Remediation could be more specific to the violation.")
+            else:
+                feedback_parts.append("Remediation is too generic — be more specific.")
 
             return reward, " ".join(feedback_parts), best_match
         else:
-            # No match — false positive or too vague
-            feedback = (
-                "✗ Finding not matched to a known violation. "
-                "Be more specific about which regulation clause is violated and what part of the feature causes it."
-            )
+            # No match — provide progressive hints
+            self._consecutive_failures += 1
+            hint = self._get_progressive_hint()
+            feedback = f"✗ Finding not matched. {hint}"
             return 0.0, feedback, None
+
+    def _score_remediation(self, fix_text: str, violation: Dict) -> float:
+        """Score how well the suggested fix addresses the specific violation.
+        
+        Returns 0.0 to 0.15 based on fix quality.
+        """
+        fix_lower = fix_text.lower().strip()
+        if len(fix_lower) < 10:
+            return 0.0
+
+        # Remediation keywords based on violation type
+        fix_keywords_map = {
+            "consent": ["consent banner", "opt-in", "consent mechanism", "affirmative", "explicit consent", "cookie"],
+            "minimization": ["reduce", "limit", "only necessary", "remove unnecessary", "minimal", "strip"],
+            "erasure": ["delete", "erasure", "removal mechanism", "data deletion", "purge", "right to delete"],
+            "encryption": ["encrypt", "tls", "aes", "ssl", "cryptograph", "secure channel"],
+            "access control": ["rbac", "role-based", "access control", "least privilege", "segregat", "restrict access"],
+            "audit": ["audit log", "logging", "monitor", "track access", "audit trail"],
+            "anonymization": ["de-identify", "anonymize", "pseudonymize", "safe harbor", "remove identifiers"],
+            "retention": ["retention policy", "data lifecycle", "delete after", "expiry", "time limit"],
+            "unsubscribe": ["unsubscribe", "opt-out", "withdraw", "revoke consent"],
+            "transparency": ["privacy notice", "inform", "disclose", "transparent", "privacy policy"],
+            "backup": ["secure storage", "encrypted backup", "enterprise storage", "offsite"],
+            "credential": ["individual account", "mfa", "multi-factor", "unique credential", "personal login"],
+            "disaster": ["disaster recovery", "drp", "business continuity", "failover", "redundancy"],
+            "change management": ["change management", "approval process", "review board", "documented process"],
+        }
+
+        # Find which fix category this violation belongs to
+        violation_text = f"{violation['description']} {' '.join(violation.get('keywords', []))}".lower()
+        
+        best_category_score = 0.0
+        for category, fix_kws in fix_keywords_map.items():
+            if category in violation_text or any(kw in violation_text for kw in fix_kws[:2]):
+                # This category is relevant — check if fix addresses it
+                matched = sum(1 for kw in fix_kws if kw in fix_lower)
+                if matched > 0:
+                    best_category_score = max(best_category_score, min(matched * 0.05, 0.15))
+
+        # Fallback: if fix is substantive (>30 chars) give minimal credit
+        if best_category_score == 0.0 and len(fix_lower) > 30:
+            best_category_score = 0.03
+
+        return best_category_score
+
+    def _get_progressive_hint(self) -> str:
+        """Generate increasingly specific hints based on consecutive failures.
+        
+        This creates a LEARNING CURRICULUM within each episode:
+        - Failure 1: General guidance
+        - Failure 2: Point to the area of concern  
+        - Failure 3: Name the regulation family
+        - Failure 4+: Nearly give the answer
+        """
+        # Find the next unfound violation to hint about
+        unfound = []
+        for v in self._scenario["violations"]:
+            vkey = self._violation_key(v)
+            if vkey not in self._found_violation_ids:
+                unfound.append(v)
+
+        if not unfound:
+            return "All violations have been found."
+
+        # Pick the easiest unfound violation (by severity: critical > high > medium > low)
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        unfound.sort(key=lambda v: severity_order.get(v["severity"], 4))
+        target = unfound[0]
+
+        level = self._consecutive_failures
+
+        if level <= 1:
+            # Level 1: General direction
+            return (
+                f"Hint: There are {len(unfound)} violations remaining. "
+                f"Look more carefully at the feature description — "
+                f"there is a {target['severity']}-severity issue you haven't identified yet."
+            )
+        elif level == 2:
+            # Level 2: Point to the regulation family
+            reg_family = target["id"].split("-")[0]  # e.g., "GDPR" from "GDPR-Art7"
+            return (
+                f"Hint: Consider the {reg_family} regulations more carefully. "
+                f"One of the {target['severity']}-severity violations relates to "
+                f"{target['keywords'][0] if target.get('keywords') else 'a key compliance area'}."
+            )
+        elif level == 3:
+            # Level 3: Name the specific regulation
+            return (
+                f"Strong hint: Look at {target['id']}. "
+                f"The feature description contains a {target['severity']}-severity violation "
+                f"related to: {', '.join(target.get('keywords', [])[:3])}."
+            )
+        else:
+            # Level 4+: Nearly give the answer
+            return (
+                f"Direct hint: {target['id']} is violated. "
+                f"Issue: {target['description'][:80]}... "
+                f"Severity: {target['severity']}. "
+                f"Submit a finding addressing this."
+            )
 
     def _match_score(self, action: ComplianceAction, violation: Dict) -> float:
         """Score how well an action matches a known violation.

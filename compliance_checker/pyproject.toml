@@ -21,6 +21,9 @@ dependencies = [
     "websockets>=11.0",
 ]
 
+[project.scripts]
+server = "compliance_checker.server.app:main"
+
 [project.optional-dependencies]
 dev = ["pytest", "httpx"]
 

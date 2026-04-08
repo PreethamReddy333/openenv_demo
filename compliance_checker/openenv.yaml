@@ -1,0 +1,15 @@
+name: compliance_checker
+version: "1.0.0"
+description: >
+  Regulatory Compliance Checker — An RL environment where AI agents audit product
+  feature descriptions for regulatory violations (GDPR, HIPAA, SOC2). Agents must
+  identify violations, classify severity, cite the correct regulation, and suggest
+  remediations. Supports 3 difficulty levels with programmatic grading.
+author: Team Daedalus
+tags:
+  - openenv
+  - compliance
+  - regulatory
+  - gdpr
+  - hipaa
+  - soc2
